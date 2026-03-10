@@ -1,0 +1,8 @@
+{
+  "name": "quizstudy",
+  "version": "1.0.0",
+  "description": "QuizStudy – Netlify Functions backend",
+  "dependencies": {
+    "@neondatabase/serverless": "^0.10.4"
+  }
+}
