@@ -776,71 +776,46 @@ function openQuizPage(chapId){
 function openSignup(){ document.getElementById('signup-overlay').classList.add('open'); }
 function openLogin(){ document.getElementById('login-overlay').classList.add('open'); }
 
-function doSignup(){
-  const name  = document.getElementById('su-name').value.trim();
-  const phone = document.getElementById('su-phone').value.trim().replace(/\s+/g,'');
-  const pass  = document.getElementById('su-pass').value.trim();
-  let ok = true;
+async function doSignup(){
+  const name=document.getElementById('su-name').value.trim();
+  const phone=document.getElementById('su-phone').value.trim().replace(/\s+/g,'');
+  const pass=document.getElementById('su-pass').value.trim();
+  let ok=true;
   document.querySelectorAll('.f-err').forEach(e=>e.classList.remove('show'));
-  if(!name){ document.getElementById('su-name-err').classList.add('show'); ok=false; }
-  if(!/^\d{10}$/.test(phone)){ document.getElementById('su-phone-err').classList.add('show'); ok=false; }
-  if(pass.length<6){ document.getElementById('su-pass-err').classList.add('show'); ok=false; }
-  if(!ok) return;
-
-  // Reload fresh DB
-  DB = loadDB();
-  if(DB.users.find(u=>String(u.phone).trim()===phone)){
-    document.getElementById('su-gen-err').textContent='\u092f\u0939 phone number \u092a\u0939\u0932\u0947 \u0938\u0947 registered \u0939\u0948\u0964';
-    document.getElementById('su-gen-err').classList.add('show');
-    return;
-  }
-
-  const user = {id:uid(), name, phone, pass, plan:null, pendingPlan:null, createdAt:new Date().toISOString()};
-  DB.users.push(user);
-  saveDB();
-
-  currentUser = user;
-  localStorage.setItem('qs_session', JSON.stringify({id:user.id}));
-  closeOverlay('signup-overlay');
-  document.getElementById('su-name').value='';
-  document.getElementById('su-phone').value='';
-  document.getElementById('su-pass').value='';
-  updateTopbar(); renderHomePage();
+  if(!name){document.getElementById('su-name-err').classList.add('show');ok=false;}
+  if(!/^\d{10}$/.test(phone)){document.getElementById('su-phone-err').classList.add('show');ok=false;}
+  if(pass.length<6){document.getElementById('su-pass-err').classList.add('show');ok=false;}
+  if(!ok)return;
+  try{
+    const res=await fetch('/.netlify/functions/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,pass})});
+    const data=await res.json();
+    if(!res.ok){document.getElementById('su-gen-err').textContent=data.error||'Error';document.getElementById('su-gen-err').classList.add('show');return;}
+    currentUser=data.user;
+    localStorage.setItem('qs_session',JSON.stringify({id:data.user.id}));
+    closeOverlay('signup-overlay');
+    document.getElementById('su-name').value='';
+    document.getElementById('su-phone').value='';
+    document.getElementById('su-pass').value='';
+    updateTopbar();renderHomePage();
+  }catch(e){document.getElementById('su-gen-err').textContent='Network error';document.getElementById('su-gen-err').classList.add('show');}
 }
 
-function doLogin(){
-  const phoneRaw = document.getElementById('li-phone').value;
-  const passRaw  = document.getElementById('li-pass').value;
-  const phone = phoneRaw.trim().replace(/\s+/g,'');
-  const pass  = passRaw.trim();
+async function doLogin(){
+  const phone=document.getElementById('li-phone').value.trim().replace(/\s+/g,'');
+  const pass=document.getElementById('li-pass').value.trim();
   document.getElementById('li-err').classList.remove('show');
-
-  // Always reload fresh from localStorage
-  DB = loadDB();
-  const users = DB.users || [];
-
-  // Find user — compare trimmed values
-  const user = users.find(u =>
-    String(u.phone).trim() === phone &&
-    String(u.pass).trim() === pass
-  );
-
-  if(!user){
-    let msg = '\u0997\u0932\u0924 Phone number \u092f\u093e Password\u0964';
-    if(!users.length) msg = '\u092a\u0939\u0932\u0947 account \u092c\u0928\u093e\u090f\u0902\u0964';
-    else if(users.find(u=>String(u.phone).trim()===phone)) msg = 'Password \u0917\u0932\u0924 \u0939\u0948\u0964';
-    document.getElementById('li-err').textContent = msg;
-    document.getElementById('li-err').classList.add('show');
-    return;
+  try{
+    const res=await fetch('/.netlify/functions/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone,pass})});
+    const data=await res.json();
+    if(!res.ok){document.getElementById('li-err').textContent=data.error||'गलत Phone या Password।';document.getElementById('li-err').classList.add('show');return;}
+    currentUser=data.user;
+    localStorage.setItem('qs_session',JSON.stringify({id:data.user.id}));
+    closeOverlay('login-overlay');
+    document.getElementById('li-phone').value='';
+    document.getElementById('li-pass').value='';
+    updateTopbar();renderHomePage();
+  }catch(e){document.getElementById('li-err').textContent='Network error';document.getElementById('li-err').classList.add('show');}
   }
-
-  currentUser = user;
-  localStorage.setItem('qs_session', JSON.stringify({id: user.id}));
-  closeOverlay('login-overlay');
-  document.getElementById('li-phone').value='';
-  document.getElementById('li-pass').value='';
-  updateTopbar(); renderHomePage();
-}
 
 function doLogout(){
   currentUser=null; localStorage.removeItem('qs_session');
