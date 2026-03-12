@@ -1,26 +1,97 @@
+// netlify/functions/get-quiz-url.js
+// Secure quiz URL delivery — URL sirf server se milta hai
+// Premium quiz ke liye user ka premium plan check karta hai
+
 const { neon } = require('@neondatabase/serverless');
+
 exports.handler = async (event) => {
-  const headers = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
-  if (event.httpMethod !== 'GET') return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method not allowed' }) };
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Content-Type': 'application/json',
+  };
+
+  // Only GET allowed
+  if (event.httpMethod !== 'GET') {
+    return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method not allowed' }) };
+  }
+
   const { quizId, type, userId } = event.queryStringParameters || {};
-  if (!quizId || !type) return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing parameters' }) };
+
+  if (!quizId || !type) {
+    return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing parameters' }) };
+  }
+
   try {
     const sql = neon(process.env.NETLIFY_DATABASE_URL);
+
+    // Premium quiz ke liye user ka plan check karo
     if (type === 'premium') {
-      if (!userId) return { statusCode: 401, headers, body: JSON.stringify({ error: 'LOGIN_REQUIRED' }) };
+      if (!userId) {
+        return {
+          statusCode: 401,
+          headers,
+          body: JSON.stringify({ error: 'LOGIN_REQUIRED' }),
+        };
+      }
+
+      // User DB se fetch karo
       const users = await sql`SELECT * FROM users WHERE id = ${userId}`;
-      if (!users.length) return { statusCode: 401, headers, body: JSON.stringify({ error: 'USER_NOT_FOUND' }) };
-      const plan = users[0].plan;
-      const isActive = plan && plan.expiresAt && new Date(plan.expiresAt).getTime() > Date.now();
-      if (!isActive) return { statusCode: 403, headers, body: JSON.stringify({ error: 'PREMIUM_REQUIRED' }) };
+      if (users.length === 0) {
+        return {
+          statusCode: 401,
+          headers,
+          body: JSON.stringify({ error: 'USER_NOT_FOUND' }),
+        };
+      }
+
+      const user = users[0];
+      const plan = user.plan;
+
+      // Plan active hai ya nahi check karo
+      const now = Date.now();
+      const isActive = plan &&
+        (plan.expiry || plan.expiresAt) &&
+        new Date(plan.expiry || plan.expiresAt).getTime() > now;
+
+      if (!isActive) {
+        return {
+          statusCode: 403,
+          headers,
+          body: JSON.stringify({ error: 'PREMIUM_REQUIRED' }),
+        };
+      }
     }
+
+    // App data se quiz URL fetch karo
     const rows = await sql`SELECT value FROM app_data WHERE key = 'main'`;
-    if (!rows.length) return { statusCode: 404, headers, body: JSON.stringify({ error: 'Data not found' }) };
-    const quizArr = type === 'premium' ? (rows[0].value.premiumQuizzes || []) : (rows[0].value.quizzes || []);
+    if (rows.length === 0) {
+      return { statusCode: 404, headers, body: JSON.stringify({ error: 'Data not found' }) };
+    }
+
+    const appData = rows[0].value;
+    const quizArr = type === 'premium'
+      ? (appData.premiumQuizzes || [])
+      : (appData.quizzes || []);
+
     const quiz = quizArr.find(q => q.id === quizId);
-    if (!quiz?.url) return { statusCode: 404, headers, body: JSON.stringify({ error: 'Quiz not found' }) };
-    return { statusCode: 200, headers, body: JSON.stringify({ url: quiz.url }) };
+
+    if (!quiz || !quiz.url) {
+      return { statusCode: 404, headers, body: JSON.stringify({ error: 'Quiz not found' }) };
+    }
+
+    // URL mil gaya — securely return karo
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({ url: quiz.url }),
+    };
+
   } catch (err) {
-    return { statusCode: 500, headers, body: JSON.stringify({ error: 'Server error: ' + err.message }) };
+    console.error('get-quiz-url error', err);
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({ error: 'Server error: ' + err.message }),
+    };
   }
 };
