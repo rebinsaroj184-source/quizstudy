@@ -579,22 +579,27 @@ async function saveDB(){
 let DB = loadDB();
 function uid(){ return 'id'+Date.now()+Math.random().toString(36).slice(2,7); }
 
-// Protected quiz URL opener — server se URL aata hai
+// Protected quiz opener — server se HTML content aata hai, modal mein dikhta hai
 async function openQuizUrl(quizId, type, btnEl){
   if(type==='premium'){
     if(!currentUser){ alert('पहले Login करें।'); openLogin(); return; }
     if(!activePlan(currentUser)){ alert('यह Premium Quiz है। Plan लें।'); openPremiumPlans(); return; }
   }
   const origText = btnEl ? btnEl.innerHTML : '';
-  if(btnEl) btnEl.innerHTML = '⏳';
+  if(btnEl) btnEl.innerHTML = '⏳ Loading...';
   try {
     const userId = currentUser ? currentUser.id : '';
     const res = await fetch(`/.netlify/functions/get-quiz-url?quizId=${encodeURIComponent(quizId)}&type=${encodeURIComponent(type)}&userId=${encodeURIComponent(userId)}`);
     const data = await res.json();
     if(res.status===401||data.error==='LOGIN_REQUIRED'){ alert('पहले Login करें।'); openLogin(); return; }
     if(res.status===403||data.error==='PREMIUM_REQUIRED'){ alert('यह Premium Quiz है। Plan लें।'); openPremiumPlans(); return; }
-    if(!data.url){ alert('Quiz URL नहीं मिली।'); return; }
-    window.open(data.url, '_blank', 'noopener,noreferrer');
+    if(!data.htmlContent && !data.url){ alert('Quiz नहीं मिली। Admin से संपर्क करें।'); return; }
+    // HTML content hai to modal mein kholo, warna URL new tab mein
+    if(data.htmlContent){
+      openQuizModal(data.htmlContent);
+    } else {
+      window.open(data.url, '_blank', 'noopener,noreferrer');
+    }
   } catch(err){ alert('Network error। Internet check करें।'); }
   finally { if(btnEl) btnEl.innerHTML = origText; }
 }
@@ -1190,7 +1195,7 @@ function renderAdminContent(){
           <div class="form-row cols2"><div><label>Class</label><select id="nq-cls" onchange="updateFltSubj('nq-cls','nq-subj','free')"><option value="">--</option></select></div><div><label>Subject</label><select id="nq-subj" onchange="updateFltChap('nq-subj','nq-chap','free')"><option value="">--</option></select></div></div>
           <div class="form-row"><div><label>Chapter</label><select id="nq-chap"><option value="">--</option></select></div></div>
           <div class="form-row cols2"><div><label>Quiz Name</label><input type="text" id="nq-name" placeholder="Quiz 1"/></div><div><label>Description</label><input type="text" id="nq-desc" placeholder="MCQ · 10 Questions"/></div></div>
-          <div class="form-row"><div><label>URL</label><input type="url" id="nq-url" placeholder="https://..."/></div></div>
+          <div class="form-row"><label>📄 Quiz HTML File</label><div style="display:flex;align-items:center;gap:12px;margin-top:8px"><div><label for="nq-file" style="display:inline-block;background:var(--accent);color:white;padding:9px 18px;border-radius:10px;cursor:pointer;font-size:.85rem;font-weight:600">📁 File चुनें</label><input type="file" id="nq-file" accept=".html" style="width:0.1px;height:0.1px;opacity:0;overflow:hidden;position:absolute;z-index:-1" onchange="document.getElementById('nq-file-name').textContent=this.files[0]?this.files[0].name:'कोई file नहीं'"/><div id="nq-file-name" style="font-size:.75rem;color:var(--muted);margin-top:4px">कोई file नहीं चुनी</div></div></div></div>
           <button class="btn-add" onclick="addQuiz('free')">➕ Add Quiz</button>
         </div>
       </div>
@@ -1243,7 +1248,7 @@ function renderAdminContent(){
           <div class="form-row cols2"><div><label>Premium Class</label><select id="npq-cls" onchange="updatePremSubjListQ()"><option value="">--</option></select></div><div><label>Premium Subject</label><select id="npq-subj" onchange="updatePremChapListQ()"><option value="">--</option></select></div></div>
           <div class="form-row"><div><label>Premium Chapter</label><select id="npq-chap"><option value="">--</option></select></div></div>
           <div class="form-row cols2"><div><label>Quiz Name</label><input type="text" id="npq-name" placeholder="Quiz 1"/></div><div><label>Description</label><input type="text" id="npq-desc" placeholder="Hard MCQ · 20 Questions"/></div></div>
-          <div class="form-row"><div><label>URL</label><input type="url" id="npq-url" placeholder="https://..."/></div></div>
+          <div class="form-row"><label>📄 Quiz HTML File</label><div style="display:flex;align-items:center;gap:12px;margin-top:8px"><div><label for="npq-file" style="display:inline-block;background:var(--gold);color:#000;padding:9px 18px;border-radius:10px;cursor:pointer;font-size:.85rem;font-weight:600">📁 File चुनें</label><input type="file" id="npq-file" accept=".html" style="width:0.1px;height:0.1px;opacity:0;overflow:hidden;position:absolute;z-index:-1" onchange="document.getElementById('npq-file-name').textContent=this.files[0]?this.files[0].name:'कोई file नहीं'"/><div id="npq-file-name" style="font-size:.75rem;color:var(--muted);margin-top:4px">कोई file नहीं चुनी</div></div></div></div>
           <button class="btn-add gold" onclick="addPremQuiz()">➕ Add Premium Quiz</button>
         </div>
       </div>
@@ -1467,7 +1472,44 @@ function renderQuizList(type){
 function editQuizInline(id,type){ document.querySelectorAll('.edit-popup').forEach(e=>e.classList.remove('open')); document.getElementById('eq-'+id).classList.add('open'); }
 function saveQuiz(id,type){ const arr=type==='free'?DB.quizzes:DB.premiumQuizzes; const qz=arr.find(q=>q.id===id); if(!qz) return; qz.name=document.getElementById('eq-n-'+id).value.trim()||qz.name; qz.desc=document.getElementById('eq-d-'+id).value.trim(); qz.url=document.getElementById('eq-u-'+id).value.trim(); saveDB(); renderQuizList(type); flash(type==='free'?'quiz-ok':'pquiz-ok'); }
 function delQuiz(id,type){ if(!confirm('Delete?')) return; if(type==='free'){ DB.quizzes=(DB.quizzes||[]).filter(q=>q.id!==id); saveDB(); renderQuizList('free'); } else { DB.premiumQuizzes=(DB.premiumQuizzes||[]).filter(q=>q.id!==id); saveDB(); renderQuizList('premium'); } }
-function addQuiz(type){ const chid=document.getElementById(type==='free'?'nq-chap':'npq-chap').value; const n=document.getElementById(type==='free'?'nq-name':'npq-name').value.trim(); if(!chid||!n){alert('Chapter और Quiz Name डालें');return;} const item={id:uid(),chapterId:chid,name:n,desc:document.getElementById(type==='free'?'nq-desc':'npq-desc').value.trim(),url:document.getElementById(type==='free'?'nq-url':'npq-url').value.trim()}; if(type==='free'){ if(!DB.quizzes) DB.quizzes=[]; DB.quizzes.push(item); saveDB(); document.getElementById('nq-name').value=''; document.getElementById('nq-url').value=''; renderQuizList('free'); flash('quiz-ok'); } else { if(!DB.premiumQuizzes) DB.premiumQuizzes=[]; DB.premiumQuizzes.push(item); saveDB(); document.getElementById('npq-name').value=''; document.getElementById('npq-url').value=''; renderQuizList('premium'); flash('pquiz-ok'); } }
+function addQuiz(type){
+  const chid = document.getElementById(type==='free'?'nq-chap':'npq-chap').value;
+  const n = document.getElementById(type==='free'?'nq-name':'npq-name').value.trim();
+  if(!chid||!n){ alert('Chapter और Quiz Name डालें'); return; }
+  const fileInput = document.getElementById(type==='free'?'nq-file':'npq-file');
+  const file = fileInput && fileInput.files && fileInput.files[0];
+  if(!file){ alert('Quiz HTML file चुनें!'); return; }
+  const reader = new FileReader();
+  reader.onload = function(e){
+    const item = {
+      id: uid(),
+      chapterId: chid,
+      name: n,
+      desc: document.getElementById(type==='free'?'nq-desc':'npq-desc').value.trim(),
+      htmlContent: e.target.result
+    };
+    if(type==='free'){
+      if(!DB.quizzes) DB.quizzes=[];
+      DB.quizzes.push(item);
+      saveDB();
+      document.getElementById('nq-name').value='';
+      document.getElementById('nq-file-name').textContent='कोई file नहीं चुनी';
+      fileInput.value='';
+      renderQuizList('free');
+      flash('quiz-ok');
+    } else {
+      if(!DB.premiumQuizzes) DB.premiumQuizzes=[];
+      DB.premiumQuizzes.push(item);
+      saveDB();
+      document.getElementById('npq-name').value='';
+      document.getElementById('npq-file-name').textContent='कोई file नहीं चुनी';
+      fileInput.value='';
+      renderQuizList('premium');
+      flash('pquiz-ok');
+    }
+  };
+  reader.readAsText(file);
+}
 
 // ── PREMIUM CONTENT CRUD ──
 function renderPremClsList(){ const list=document.getElementById('pcls-list'); if(!list) return; list.innerHTML=''; DB.premiumClasses.forEach(cls=>{ const d=document.createElement('div'); d.className='a-item'; d.innerHTML=`<span style="font-size:1.4rem">${cls.emoji||'👑'}</span><div class="a-item-info"><div class="a-item-name">${cls.name}</div><div class="a-item-sub">${cls.sub||''}</div></div><div class="a-actions"><button class="btn-del" onclick="delPremClass('${cls.id}')">🗑️</button></div>`; list.appendChild(d); }); }
@@ -1601,9 +1643,38 @@ async function deleteUser(userId){
 }
 
 // ═══════════════════════════════════════
+// QUIZ MODAL — website ke andar quiz kholta hai
+// ═══════════════════════════════════════
+function openQuizModal(htmlContent){
+  const modal = document.getElementById('quiz-modal');
+  const frame = document.getElementById('quiz-frame');
+  // iframe mein HTML content load karo
+  frame.srcdoc = htmlContent;
+  modal.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+}
+function closeQuizModal(){
+  const modal = document.getElementById('quiz-modal');
+  const frame = document.getElementById('quiz-frame');
+  modal.style.display = 'none';
+  frame.srcdoc = '';
+  document.body.style.overflow = '';
+}
+
+// ═══════════════════════════════════════
 // INIT — session load triggers renderHomePage + updateTopbar
 // ═══════════════════════════════════════
 // (called inside loadSession() above)
 </script>
+
+<!-- ══════════ QUIZ MODAL ══════════ -->
+<div id="quiz-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;background:rgba(0,0,0,0.95);flex-direction:column;">
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:#0d0d1a;border-bottom:1px solid rgba(255,255,255,0.1);flex-shrink:0;">
+    <span style="font-family:'Baloo 2',cursive;font-weight:800;font-size:1rem;background:linear-gradient(90deg,#ff4d6d,#ffd166);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">📝 Quiz</span>
+    <button onclick="closeQuizModal()" style="background:rgba(255,77,109,0.15);border:1px solid rgba(255,77,109,0.3);color:#ff4d6d;padding:6px 16px;border-radius:20px;cursor:pointer;font-size:.85rem;font-weight:600;">✕ बंद करें</button>
+  </div>
+  <iframe id="quiz-frame" srcdoc="" style="flex:1;width:100%;border:none;background:#fff;"></iframe>
+</div>
+
 </body>
 </html>
