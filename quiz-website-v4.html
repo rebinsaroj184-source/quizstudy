@@ -579,16 +579,24 @@ async function saveDB(){
 let DB = loadDB();
 function uid(){ return 'id'+Date.now()+Math.random().toString(36).slice(2,7); }
 
-// Protected quiz URL opener — URL never exposed in HTML
-function openQuizUrl(quizId, type){
-  const arr = type==='premium' ? (DB.premiumQuizzes||[]) : (DB.quizzes||[]);
-  const qz = arr.find(q=>q.id===quizId);
-  if(!qz || !qz.url){ alert('Quiz URL nahi mili!'); return; }
+// Protected quiz URL opener — server se URL aata hai
+async function openQuizUrl(quizId, type, btnEl){
   if(type==='premium'){
     if(!currentUser){ alert('पहले Login करें।'); openLogin(); return; }
     if(!activePlan(currentUser)){ alert('यह Premium Quiz है। Plan लें।'); openPremiumPlans(); return; }
   }
-  window.open(qz.url, '_blank', 'noopener,noreferrer');
+  const origText = btnEl ? btnEl.innerHTML : '';
+  if(btnEl) btnEl.innerHTML = '⏳';
+  try {
+    const userId = currentUser ? currentUser.id : '';
+    const res = await fetch(`/.netlify/functions/get-quiz-url?quizId=${encodeURIComponent(quizId)}&type=${encodeURIComponent(type)}&userId=${encodeURIComponent(userId)}`);
+    const data = await res.json();
+    if(res.status===401||data.error==='LOGIN_REQUIRED'){ alert('पहले Login करें।'); openLogin(); return; }
+    if(res.status===403||data.error==='PREMIUM_REQUIRED'){ alert('यह Premium Quiz है। Plan लें।'); openPremiumPlans(); return; }
+    if(!data.url){ alert('Quiz URL नहीं मिली।'); return; }
+    window.open(data.url, '_blank', 'noopener,noreferrer');
+  } catch(err){ alert('Network error। Internet check करें।'); }
+  finally { if(btnEl) btnEl.innerHTML = origText; }
 }
 
 // ═══════════════════════════════════════
@@ -779,7 +787,7 @@ function openQuizPage(chapId){
     quizzes.forEach((qz,i)=>{
       const [c1,c2]=colors[i%colors.length];
       const a=document.createElement('a'); a.className='quiz-card'; a.href='#'; a.rel='noopener';
-      a.onclick=(e)=>{ e.preventDefault(); openQuizUrl(qz.id,'free'); };
+      a.onclick=(e)=>{ e.preventDefault(); openQuizUrl(qz.id,'free',a); };
       a.innerHTML=`<div class="qc-num" style="background:linear-gradient(135deg,${c1},${c2});box-shadow:0 5px 18px ${c1}55">${i+1}</div><div class="qc-title">${qz.name}</div><div class="qc-sub">${qz.desc||''}</div><div class="qc-badge">▶ Start</div>`;
       grid.appendChild(a);
     });
@@ -1084,7 +1092,7 @@ function loadPremQuizzes(chapId){
   const colors=[['#ff4d6d','#c9184a'],['#ffd166','#e6a817'],['#06d6a0','#028a5b'],['#4361ee','#3a0ca3'],['#f72585','#b5179e']];
   let html=`<div style="margin:16px 0 10px;font-family:'Baloo 2',cursive;font-weight:700;font-size:1rem;color:var(--gold)">🎯 ${ch.name} – Quizzes</div><div class="quiz-grid">`;
   if(!quizzes.length){ html+=`<div class="quiz-empty"><span class="qe-icon">📭</span><p>कोई Premium Quiz नहीं। Admin से जोड़ें।</p></div>`; }
-  else { quizzes.forEach((qz,i)=>{ const [c1,c2]=colors[i%colors.length]; html+=`<a class="quiz-card" href="#" rel="noopener" onclick="event.preventDefault();openQuizUrl('${qz.id}','premium')"><div class="qc-num" style="background:linear-gradient(135deg,${c1},${c2})">${i+1}</div><div class="qc-title">${qz.name}</div><div class="qc-sub">${qz.desc||''}</div><div class="qc-badge" style="background:rgba(255,209,102,0.15);border-color:rgba(255,209,102,0.3);color:var(--gold)">▶ Start</div></a>`; }); }
+  else { quizzes.forEach((qz,i)=>{ const [c1,c2]=colors[i%colors.length]; html+=`<a class="quiz-card" href="#" rel="noopener" onclick="event.preventDefault();openQuizUrl('${qz.id}','premium',this)"><div class="qc-num" style="background:linear-gradient(135deg,${c1},${c2})">${i+1}</div><div class="qc-title">${qz.name}</div><div class="qc-sub">${qz.desc||''}</div><div class="qc-badge" style="background:rgba(255,209,102,0.15);border-color:rgba(255,209,102,0.3);color:var(--gold)">▶ Start</div></a>`; }); }
   html+='</div>';
   area.innerHTML=html;
 }
