@@ -75,16 +75,18 @@ exports.handler = async (event) => {
 
     const quiz = quizArr.find(q => q.id === quizId);
 
-    if (!quiz || !quiz.url) {
+    if (!quiz) {
       return { statusCode: 404, headers, body: JSON.stringify({ error: 'Quiz not found' }) };
     }
 
-    // URL mil gaya — securely return karo
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({ url: quiz.url }),
-    };
+    // htmlContent hai to woh do, warna url do (backward compatibility)
+    if (quiz.htmlContent) {
+      return { statusCode: 200, headers, body: JSON.stringify({ htmlContent: quiz.htmlContent }) };
+    } else if (quiz.url) {
+      return { statusCode: 200, headers, body: JSON.stringify({ url: quiz.url }) };
+    } else {
+      return { statusCode: 404, headers, body: JSON.stringify({ error: 'Quiz content not found' }) };
+    }
 
   } catch (err) {
     console.error('get-quiz-url error', err);
