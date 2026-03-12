@@ -579,6 +579,18 @@ async function saveDB(){
 let DB = loadDB();
 function uid(){ return 'id'+Date.now()+Math.random().toString(36).slice(2,7); }
 
+// Protected quiz URL opener — URL never exposed in HTML
+function openQuizUrl(quizId, type){
+  const arr = type==='premium' ? (DB.premiumQuizzes||[]) : (DB.quizzes||[]);
+  const qz = arr.find(q=>q.id===quizId);
+  if(!qz || !qz.url){ alert('Quiz URL nahi mili!'); return; }
+  if(type==='premium'){
+    if(!currentUser){ alert('पहले Login करें।'); openLogin(); return; }
+    if(!activePlan(currentUser)){ alert('यह Premium Quiz है। Plan लें।'); openPremiumPlans(); return; }
+  }
+  window.open(qz.url, '_blank', 'noopener,noreferrer');
+}
+
 // ═══════════════════════════════════════
 // AUTH STATE
 // ═══════════════════════════════════════
@@ -589,6 +601,10 @@ let selectedPlan=null, selectedPayMethod=null;
 let adminLoggedIn = false;
 
 async function loadSession(){
+  // Koi bhi URL share ho — always homepage par aao
+  if(window.location.search || window.location.hash){
+    history.replaceState(null,'',window.location.pathname);
+  }
   await loadDBFromServer();
   try{
     const s = localStorage.getItem('qs_session');
@@ -762,7 +778,8 @@ function openQuizPage(chapId){
   } else {
     quizzes.forEach((qz,i)=>{
       const [c1,c2]=colors[i%colors.length];
-      const a=document.createElement('a'); a.className='quiz-card'; a.href=qz.url||'#'; a.target='_blank'; a.rel='noopener';
+      const a=document.createElement('a'); a.className='quiz-card'; a.href='#'; a.rel='noopener';
+      a.onclick=(e)=>{ e.preventDefault(); openQuizUrl(qz.id,'free'); };
       a.innerHTML=`<div class="qc-num" style="background:linear-gradient(135deg,${c1},${c2});box-shadow:0 5px 18px ${c1}55">${i+1}</div><div class="qc-title">${qz.name}</div><div class="qc-sub">${qz.desc||''}</div><div class="qc-badge">▶ Start</div>`;
       grid.appendChild(a);
     });
@@ -777,45 +794,77 @@ function openSignup(){ document.getElementById('signup-overlay').classList.add('
 function openLogin(){ document.getElementById('login-overlay').classList.add('open'); }
 
 async function doSignup(){
-  const name=document.getElementById('su-name').value.trim();
-  const phone=document.getElementById('su-phone').value.trim().replace(/\s+/g,'');
-  const pass=document.getElementById('su-pass').value.trim();
-  let ok=true;
+  const name  = document.getElementById('su-name').value.trim();
+  const phone = document.getElementById('su-phone').value.trim().replace(/\s+/g,'');
+  const pass  = document.getElementById('su-pass').value.trim();
+  let ok = true;
   document.querySelectorAll('.f-err').forEach(e=>e.classList.remove('show'));
-  if(!name){document.getElementById('su-name-err').classList.add('show');ok=false;}
-  if(!/^\d{10}$/.test(phone)){document.getElementById('su-phone-err').classList.add('show');ok=false;}
-  if(pass.length<6){document.getElementById('su-pass-err').classList.add('show');ok=false;}
-  if(!ok)return;
+  if(!name){ document.getElementById('su-name-err').classList.add('show'); ok=false; }
+  if(!/^\d{10}$/.test(phone)){ document.getElementById('su-phone-err').classList.add('show'); ok=false; }
+  if(pass.length<6){ document.getElementById('su-pass-err').classList.add('show'); ok=false; }
+  if(!ok) return;
+
+  const btn = document.querySelector('#signup-overlay .btn-primary');
+  if(btn){ btn.disabled=true; btn.textContent='...'; }
+
   try{
-    const res=await fetch('/.netlify/functions/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,pass})});
-    const data=await res.json();
-    if(!res.ok){document.getElementById('su-gen-err').textContent=data.error||'Error';document.getElementById('su-gen-err').classList.add('show');return;}
-    currentUser=data.user;
-    localStorage.setItem('qs_session',JSON.stringify({id:data.user.id}));
+    const res = await fetch('/.netlify/functions/signup', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name, phone, pass}),
+    });
+    const data = await res.json();
+    if(!res.ok){
+      document.getElementById('su-gen-err').textContent = data.error || 'Error हुआ।';
+      document.getElementById('su-gen-err').classList.add('show');
+      return;
+    }
+    currentUser = data.user;
+    localStorage.setItem('qs_session', JSON.stringify({id:data.user.id}));
     closeOverlay('signup-overlay');
     document.getElementById('su-name').value='';
     document.getElementById('su-phone').value='';
     document.getElementById('su-pass').value='';
-    updateTopbar();renderHomePage();
-  }catch(e){document.getElementById('su-gen-err').textContent='Network error';document.getElementById('su-gen-err').classList.add('show');}
+    updateTopbar(); renderHomePage();
+  } catch(e){
+    document.getElementById('su-gen-err').textContent = 'Network error। फिर try करें।';
+    document.getElementById('su-gen-err').classList.add('show');
+  } finally {
+    if(btn){ btn.disabled=false; btn.textContent='✅ Account बनाएं'; }
+  }
 }
 
 async function doLogin(){
-  const phone=document.getElementById('li-phone').value.trim().replace(/\s+/g,'');
-  const pass=document.getElementById('li-pass').value.trim();
+  const phone = document.getElementById('li-phone').value.trim().replace(/\s+/g,'');
+  const pass  = document.getElementById('li-pass').value.trim();
   document.getElementById('li-err').classList.remove('show');
+
+  const btn = document.querySelector('#login-overlay .btn-primary');
+  if(btn){ btn.disabled=true; btn.textContent='...'; }
+
   try{
-    const res=await fetch('/.netlify/functions/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone,pass})});
-    const data=await res.json();
-    if(!res.ok){document.getElementById('li-err').textContent=data.error||'गलत Phone या Password।';document.getElementById('li-err').classList.add('show');return;}
-    currentUser=data.user;
-    localStorage.setItem('qs_session',JSON.stringify({id:data.user.id}));
+    const res = await fetch('/.netlify/functions/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({phone, pass}),
+    });
+    const data = await res.json();
+    if(!res.ok){
+      document.getElementById('li-err').textContent = data.error || 'गलत Phone या Password।';
+      document.getElementById('li-err').classList.add('show');
+      return;
+    }
+    currentUser = data.user;
+    localStorage.setItem('qs_session', JSON.stringify({id: data.user.id}));
     closeOverlay('login-overlay');
     document.getElementById('li-phone').value='';
     document.getElementById('li-pass').value='';
-    updateTopbar();renderHomePage();
-  }catch(e){document.getElementById('li-err').textContent='Network error';document.getElementById('li-err').classList.add('show');}
+    updateTopbar(); renderHomePage();
+  } catch(e){
+    document.getElementById('li-err').textContent = 'Network error। फिर try करें।';
+    document.getElementById('li-err').classList.add('show');
+  } finally {
+    if(btn){ btn.disabled=false; btn.textContent='🔑 Login'; }
   }
+}
 
 function doLogout(){
   currentUser=null; localStorage.removeItem('qs_session');
@@ -877,8 +926,9 @@ function selectPayMethod(pm){
   const upi = pm.upi || '8429415544@fam';
 
   if(pm.id==='pm3' || (pm.name && pm.name.toLowerCase().includes('qr'))){
+    const qrSrc = DB.qrImage || QR_IMAGE_B64;
     box.innerHTML=`<div class="qr-box">
-      <img src="${QR_IMAGE_B64}" style="width:170px;height:170px;border-radius:12px;object-fit:cover;display:block;margin:0 auto;" alt="QR Code"/>
+      <img src="${qrSrc}" style="width:170px;height:170px;border-radius:12px;object-fit:cover;display:block;margin:0 auto;" alt="QR Code"/>
       <div class="qr-upi">${upi}</div>
       <p>किसी भी UPI app से QR Scan करें और ₹${amount} भेजें</p>
     </div>`;
@@ -1034,7 +1084,7 @@ function loadPremQuizzes(chapId){
   const colors=[['#ff4d6d','#c9184a'],['#ffd166','#e6a817'],['#06d6a0','#028a5b'],['#4361ee','#3a0ca3'],['#f72585','#b5179e']];
   let html=`<div style="margin:16px 0 10px;font-family:'Baloo 2',cursive;font-weight:700;font-size:1rem;color:var(--gold)">🎯 ${ch.name} – Quizzes</div><div class="quiz-grid">`;
   if(!quizzes.length){ html+=`<div class="quiz-empty"><span class="qe-icon">📭</span><p>कोई Premium Quiz नहीं। Admin से जोड़ें।</p></div>`; }
-  else { quizzes.forEach((qz,i)=>{ const [c1,c2]=colors[i%colors.length]; html+=`<a class="quiz-card" href="${qz.url||'#'}" target="_blank" rel="noopener"><div class="qc-num" style="background:linear-gradient(135deg,${c1},${c2})">${i+1}</div><div class="qc-title">${qz.name}</div><div class="qc-sub">${qz.desc||''}</div><div class="qc-badge" style="background:rgba(255,209,102,0.15);border-color:rgba(255,209,102,0.3);color:var(--gold)">▶ Start</div></a>`; }); }
+  else { quizzes.forEach((qz,i)=>{ const [c1,c2]=colors[i%colors.length]; html+=`<a class="quiz-card" href="#" rel="noopener" onclick="event.preventDefault();openQuizUrl('${qz.id}','premium')"><div class="qc-num" style="background:linear-gradient(135deg,${c1},${c2})">${i+1}</div><div class="qc-title">${qz.name}</div><div class="qc-sub">${qz.desc||''}</div><div class="qc-badge" style="background:rgba(255,209,102,0.15);border-color:rgba(255,209,102,0.3);color:var(--gold)">▶ Start</div></a>`; }); }
   html+='</div>';
   area.innerHTML=html;
 }
@@ -1439,11 +1489,61 @@ function addPlan(){ const n=document.getElementById('np-name').value.trim(); con
 // ── PAYMENT METHODS ──
 function renderPayMethodList(){ const list=document.getElementById('pm-list'); if(!list) return; list.innerHTML=''; DB.paymentMethods.forEach(pm=>{ const d=document.createElement('div'); d.className='a-item'; d.innerHTML=`<span style="font-size:1.4rem">${pm.icon||'💳'}</span><div class="a-item-info"><div class="a-item-name">${pm.name}</div><div class="a-item-sub">UPI: ${pm.upi} · ${pm.desc||''}</div></div><div class="a-actions"><button class="btn-edit" onclick="editPMInline('${pm.id}')">✏️</button><button class="btn-del" onclick="delPayMethod('${pm.id}')">🗑️</button></div>`; list.appendChild(d);
   const ef=document.createElement('div'); ef.className='edit-popup'; ef.id='epm-'+pm.id;
-  ef.innerHTML=`<div class="form-row cols2"><div><label>Name</label><input type="text" id="epm-n-${pm.id}" value="${pm.name}"/></div><div><label>Icon</label><input type="text" id="epm-i-${pm.id}" value="${pm.icon||''}"/></div></div><div class="form-row cols2"><div><label>UPI ID</label><input type="text" id="epm-u-${pm.id}" value="${pm.upi||''}"/></div><div><label>Desc</label><input type="text" id="epm-d-${pm.id}" value="${pm.desc||''}"/></div></div><button class="btn-save" onclick="savePayMethod('${pm.id}')">💾 Save</button><button class="btn-cancel-edit" onclick="document.getElementById('epm-${pm.id}').classList.remove('open')">Cancel</button>`;
+  const qrSection = (pm.id==='pm3'||(pm.name&&pm.name.toLowerCase().includes('qr'))) ? `
+    <div class="form-row">
+      <label>📷 QR Image बदलें</label>
+      <div style="display:flex;align-items:center;gap:14px;margin-top:10px">
+        <img id="epm-qr-preview-${pm.id}" src="${DB.qrImage||QR_IMAGE_B64}" style="width:72px;height:72px;border-radius:10px;object-fit:cover;border:2px solid var(--border);flex-shrink:0"/>
+        <div>
+          <label for="epm-qr-file-${pm.id}" style="display:inline-block;background:var(--accent);color:white;padding:9px 18px;border-radius:10px;cursor:pointer;font-size:.85rem;font-weight:600">
+            📁 Image चुनें
+          </label>
+          <input type="file" id="epm-qr-file-${pm.id}" accept="image/*" style="width:0.1px;height:0.1px;opacity:0;overflow:hidden;position:absolute;z-index:-1" onchange="previewQR('${pm.id}',this)"/>
+          <div id="epm-qr-name-${pm.id}" style="font-size:.75rem;color:var(--muted);margin-top:5px">कोई file नहीं चुनी</div>
+        </div>
+      </div>
+    </div>` : '';
+  ef.innerHTML=`
+    <div class="form-row cols2">
+      <div><label>Name</label><input type="text" id="epm-n-${pm.id}" value="${pm.name}"/></div>
+      <div><label>Icon</label><input type="text" id="epm-i-${pm.id}" value="${pm.icon||''}"/></div>
+    </div>
+    <div class="form-row cols2">
+      <div><label>UPI ID</label><input type="text" id="epm-u-${pm.id}" value="${pm.upi||''}"/></div>
+      <div><label>Desc</label><input type="text" id="epm-d-${pm.id}" value="${pm.desc||''}"/></div>
+    </div>
+    ${qrSection}
+    <button class="btn-save" onclick="savePayMethod('${pm.id}')">💾 Save</button>
+    <button class="btn-cancel-edit" onclick="document.getElementById('epm-${pm.id}').classList.remove('open')">Cancel</button>`;
   list.appendChild(ef);
 }); }
 function editPMInline(id){ document.querySelectorAll('.edit-popup').forEach(e=>e.classList.remove('open')); document.getElementById('epm-'+id).classList.add('open'); }
-function savePayMethod(id){ const pm=DB.paymentMethods.find(p=>p.id===id); pm.name=document.getElementById('epm-n-'+id).value.trim()||pm.name; pm.icon=document.getElementById('epm-i-'+id).value.trim(); pm.upi=document.getElementById('epm-u-'+id).value.trim(); pm.desc=document.getElementById('epm-d-'+id).value.trim(); saveDB(); renderPayMethodList(); flash('pm-ok'); }
+function previewQR(id, input){
+  if(!input.files || !input.files[0]) return;
+  const file = input.files[0];
+  document.getElementById('epm-qr-name-'+id).textContent = file.name;
+  const reader = new FileReader();
+  reader.onload = function(e){
+    document.getElementById('epm-qr-preview-'+id).src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function savePayMethod(id){ 
+  const pm=DB.paymentMethods.find(p=>p.id===id); 
+  pm.name=document.getElementById('epm-n-'+id).value.trim()||pm.name; 
+  pm.icon=document.getElementById('epm-i-'+id).value.trim(); 
+  pm.upi=document.getElementById('epm-u-'+id).value.trim(); 
+  pm.desc=document.getElementById('epm-d-'+id).value.trim();
+  const qrInput=document.getElementById('epm-qr-file-'+id);
+  if(qrInput && qrInput.files && qrInput.files[0]){
+    const reader=new FileReader();
+    reader.onload=function(e){ DB.qrImage=e.target.result; saveDB(); renderPayMethodList(); flash('pm-ok'); };
+    reader.readAsDataURL(qrInput.files[0]);
+  } else {
+    saveDB(); renderPayMethodList(); flash('pm-ok');
+  }
+}
 function delPayMethod(id){ if(!confirm('Delete?')) return; DB.paymentMethods=DB.paymentMethods.filter(p=>p.id!==id); saveDB(); renderPayMethodList(); }
 function addPayMethod(){ const n=document.getElementById('npm-name').value.trim(); if(!n){alert('Name डालें');return;} DB.paymentMethods.push({id:uid(),name:n,icon:document.getElementById('npm-icon').value.trim()||'💳',upi:document.getElementById('npm-upi').value.trim(),desc:document.getElementById('npm-desc').value.trim()}); saveDB(); renderPayMethodList(); flash('pm-ok'); ['npm-name','npm-icon','npm-upi','npm-desc'].forEach(x=>{const el=document.getElementById(x); if(el) el.value='';}); }
 
