@@ -196,6 +196,70 @@ exports.handler = async (event) => {
       return { statusCode: 200, headers, body: JSON.stringify({ users }) };
     }
 
+    // ── SAVE QUIZ SCORE (Student) ─────────────────────────────────
+    if (event.httpMethod === 'POST' && action === 'save-score') {
+      const { userId, userName, quizId, quizName, score, total, timeTaken } = body;
+      if (!userId || !quizId || score === undefined || !total) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing fields' }) };
+      }
+      await sql`
+        CREATE TABLE IF NOT EXISTS quiz_scores (
+          id          TEXT PRIMARY KEY,
+          user_id     TEXT NOT NULL,
+          user_name   TEXT,
+          quiz_id     TEXT NOT NULL,
+          quiz_name   TEXT,
+          score       INTEGER NOT NULL,
+          total       INTEGER NOT NULL,
+          time_taken  INTEGER,
+          percentage  INTEGER,
+          submitted_at TEXT
+        )
+      `;
+      const id = 'sc' + Date.now() + Math.random().toString(36).slice(2,6);
+      const percentage = Math.round((score / total) * 100);
+      const submittedAt = new Date().toISOString();
+      await sql`
+        INSERT INTO quiz_scores (id, user_id, user_name, quiz_id, quiz_name, score, total, time_taken, percentage, submitted_at)
+        VALUES (${id}, ${userId}, ${userName||'Unknown'}, ${quizId}, ${quizName||'Quiz'}, ${score}, ${total}, ${timeTaken||0}, ${percentage}, ${submittedAt})
+      `;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, percentage }) };
+    }
+
+    // ── GET LEADERBOARD ─────────────────────────────────────────
+    if (event.httpMethod === 'GET' && action === 'leaderboard') {
+      const { quizId } = event.queryStringParameters || {};
+      await sql`
+        CREATE TABLE IF NOT EXISTS quiz_scores (
+          id TEXT PRIMARY KEY, user_id TEXT, user_name TEXT,
+          quiz_id TEXT, quiz_name TEXT, score INTEGER, total INTEGER,
+          time_taken INTEGER, percentage INTEGER, submitted_at TEXT
+        )
+      `;
+      // Best score per user per quiz
+      let rows;
+      if (quizId) {
+        rows = await sql`
+          SELECT DISTINCT ON (user_id) user_id, user_name, quiz_id, quiz_name,
+            score, total, time_taken, percentage, submitted_at
+          FROM quiz_scores
+          WHERE quiz_id = ${quizId}
+          ORDER BY user_id, percentage DESC, time_taken ASC
+        `;
+      } else {
+        // Global — best score overall per user
+        rows = await sql`
+          SELECT DISTINCT ON (user_id) user_id, user_name, quiz_id, quiz_name,
+            score, total, time_taken, percentage, submitted_at
+          FROM quiz_scores
+          ORDER BY user_id, percentage DESC, time_taken ASC
+        `;
+      }
+      // Sort by percentage desc, time asc
+      const sorted = rows.sort((a,b) => b.percentage - a.percentage || a.time_taken - b.time_taken);
+      return { statusCode: 200, headers, body: JSON.stringify({ leaderboard: sorted }) };
+    }
+
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Unknown action' }) };
 
   } catch (err) {
