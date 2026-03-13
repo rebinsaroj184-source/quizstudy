@@ -562,10 +562,14 @@ function defaultDB(){
 function loadDB(){
   return defaultDB();
 }
-async function loadDBFromServer(){
+let _dbLastFetch = 0;
+async function loadDBFromServer(force=false){
+  const now = Date.now();
+  // 5 minute cache — baar baar fetch nahi hoga
+  if(!force && _dbLastFetch && (now - _dbLastFetch) < 5*60*1000) return;
   try{
     const res = await fetch('/.netlify/functions/db?action=get');
-    if(res.ok){ const { data } = await res.json(); DB = Object.assign({}, defaultDB(), data); }
+    if(res.ok){ const { data } = await res.json(); DB = Object.assign({}, defaultDB(), data); _dbLastFetch = Date.now(); }
   } catch(e){ console.warn('loadDBFromServer error', e); }
 }
 async function saveDB(){
@@ -1006,7 +1010,7 @@ async function approvePayment(reqId){
       body: JSON.stringify({ reqId }),
     });
     const data = await res.json();
-    if(data.ok){ alert('✅ Plan approve हो गया!'); renderAdminPayReqs(); }
+    if(data.ok){ alert('✅ Plan approve हो गया!'); _payreqsLastFetch=0; _usersLastFetch=0; renderAdminPayReqs(); }
     else alert('Error: ' + data.error);
   } catch(e){ alert('Network error'); }
 }
@@ -1018,8 +1022,7 @@ async function rejectPayment(reqId){
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ reqId }),
     });
-    alert('❌ Payment request reject कर दी।');
-    renderAdminPayReqs();
+    alert('❌ Payment request reject कर दी।'); _payreqsLastFetch=0; renderAdminPayReqs();
   } catch(e){ alert('Network error'); }
 }
 
@@ -1291,6 +1294,7 @@ function renderAdminContent(){
   initAdminData();
 }
 
+let _payreqsLastFetch = 0, _usersLastFetch = 0;
 function switchTab(id){
   document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
@@ -1298,15 +1302,18 @@ function switchTab(id){
   const tabs=['tab-classes','tab-subjects','tab-chapters','tab-quizzes','tab-prem-classes','tab-prem-subjects','tab-prem-chapters','tab-prem-quizzes','tab-plans','tab-payments','tab-payreqs','tab-users'];
   const idx=tabs.indexOf(id);
   if(idx>=0) document.querySelectorAll('.tab')[idx].classList.add('active');
-  if(id==='tab-payreqs') renderAdminPayReqs();
-  if(id==='tab-users') renderUserTable();
+  const now = Date.now();
+  // 2 minute cache — baar baar switch karne par fetch nahi hoga
+  if(id==='tab-payreqs' && (now - _payreqsLastFetch) > 2*60*1000){ _payreqsLastFetch=now; renderAdminPayReqs(); }
+  if(id==='tab-users' && (now - _usersLastFetch) > 2*60*1000){ _usersLastFetch=now; renderUserTable(); }
 }
 
 async function initAdminData(){
-  await loadDBFromServer();
+  // DB already loadSession mein load ho chuka hai — dobara fetch nahi karo
   populateSelects(); renderClsList(); renderSubjList(); renderChapList(); renderQuizList('free');
   renderPremClsList(); renderPremSubjList(); renderPremChapList(); renderPremQuizList();
-  renderPlanList(); renderPayMethodList(); renderUserTable(); renderAdminPayReqs();
+  renderPlanList(); renderPayMethodList();
+  // Users aur PayReqs tab click par hi load honge — startup par nahi
 }
 
 async function renderAdminPayReqs(){
@@ -1316,45 +1323,117 @@ async function renderAdminPayReqs(){
     const res = await fetch('/.netlify/functions/db?action=pay-requests');
     const { requests } = await res.json();
     const reqs = requests || [];
-    if(!reqs.length){ con.innerHTML=`<p style="text-align:center;color:var(--muted);padding:30px;">कोई payment request नहीं है।</p>`; return; }
+
     const pending = reqs.filter(r=>r.status==='pending');
-    const done = reqs.filter(r=>r.status!=='pending');
-    let html = '';
-    if(pending.length){
-      html += `<div style="font-weight:700;color:var(--gold);margin-bottom:10px;">⏳ Pending (${pending.length})</div>`;
-      pending.forEach(r=>{
-        const date = new Date(r.submitted_at).toLocaleString('hi-IN');
-        html += `<div style="background:#1a1a2e;border:2px solid var(--gold);border-radius:12px;padding:14px;margin-bottom:12px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-            <div>
-              <div style="font-weight:700;font-size:1rem;">👤 ${r.user_name} &nbsp; <span style="color:var(--muted);font-size:.85rem;">📞 ${r.user_phone}</span></div>
-              <div style="color:var(--teal);margin-top:4px;">💳 ${r.plan_name} · ₹${r.price} · ${r.days} दिन</div>
-              <div style="color:var(--muted);font-size:.8rem;margin-top:3px;">📱 ${r.method} &nbsp;|&nbsp; 🕐 ${date}</div>
-            </div>
-            <div style="display:flex;gap:8px;">
-              <button onclick="approvePayment('${r.id}')" style="padding:8px 18px;background:var(--teal);color:#000;border:none;border-radius:20px;font-weight:800;cursor:pointer;font-size:.9rem;">✅ Approve</button>
-              <button onclick="rejectPayment('${r.id}')" style="padding:8px 18px;background:var(--accent);color:#fff;border:none;border-radius:20px;font-weight:800;cursor:pointer;font-size:.9rem;">❌ Reject</button>
-            </div>
-          </div>
-        </div>`;
-      });
+    const approved = reqs.filter(r=>r.status==='approved');
+    const rejected = reqs.filter(r=>r.status==='rejected');
+
+    // Plan-wise grouping
+    const planGroups = {};
+    pending.forEach(r=>{
+      const key = r.plan_name || 'Other';
+      if(!planGroups[key]) planGroups[key] = [];
+      planGroups[key].push(r);
+    });
+    const planKeys = Object.keys(planGroups);
+
+    // Tab state
+    const activeTab = window._payreqTab || 'pending';
+
+    let html = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+      <button onclick="window._payreqTab='pending';renderAdminPayReqs()" style="padding:7px 16px;border-radius:20px;border:none;cursor:pointer;font-weight:700;font-size:.85rem;background:${activeTab==='pending'?'var(--gold)':'rgba(255,255,255,0.08)'};color:${activeTab==='pending'?'#000':'var(--text)'}">
+        ⏳ Pending <span style="background:${activeTab==='pending'?'rgba(0,0,0,0.2)':'var(--accent)'};color:${activeTab==='pending'?'#000':'#fff'};padding:1px 8px;border-radius:10px;margin-left:4px;">${pending.length}</span>
+      </button>
+      <button onclick="window._payreqTab='approved';renderAdminPayReqs()" style="padding:7px 16px;border-radius:20px;border:none;cursor:pointer;font-weight:700;font-size:.85rem;background:${activeTab==='approved'?'var(--teal)':'rgba(255,255,255,0.08)'};color:${activeTab==='approved'?'#000':'var(--text)'}">
+        ✅ Approved <span style="background:rgba(0,0,0,0.15);padding:1px 8px;border-radius:10px;margin-left:4px;">${approved.length}</span>
+      </button>
+      <button onclick="window._payreqTab='rejected';renderAdminPayReqs()" style="padding:7px 16px;border-radius:20px;border:none;cursor:pointer;font-weight:700;font-size:.85rem;background:${activeTab==='rejected'?'var(--accent)':'rgba(255,255,255,0.08)'};color:#${activeTab==='rejected'?'fff':'var(--text)'}">
+        ❌ Rejected <span style="background:rgba(0,0,0,0.15);padding:1px 8px;border-radius:10px;margin-left:4px;">${rejected.length}</span>
+      </button>
+    </div>`;
+
+    // ── PENDING TAB ──
+    if(activeTab==='pending'){
+      if(!pending.length){
+        html += `<div style="text-align:center;padding:40px;color:var(--muted);">🎉 कोई pending request नहीं!</div>`;
+      } else {
+        // Plan-wise sections
+        planKeys.forEach(planName=>{
+          const group = planGroups[planName];
+          html += `<div style="margin-bottom:20px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+              <div style="background:var(--gold);color:#000;padding:3px 14px;border-radius:20px;font-weight:800;font-size:.85rem;">💳 ${planName}</div>
+              <div style="color:var(--muted);font-size:.82rem;">${group[0]?.days||''} दिन · ₹${group[0]?.price||''}</div>
+              <div style="color:var(--gold);font-size:.82rem;margin-left:auto;">${group.length} request${group.length>1?'s':''}</div>
+            </div>`;
+          group.forEach(r=>{
+            const date = new Date(r.submitted_at).toLocaleString('hi-IN');
+            const expiry = new Date(Date.now() + (r.days||0)*24*60*60*1000).toLocaleDateString('hi-IN');
+            html += `<div style="background:#1a1a2e;border:2px solid rgba(255,209,102,0.3);border-radius:12px;padding:14px;margin-bottom:10px;">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;">
+                <div>
+                  <div style="font-weight:700;font-size:1rem;">👤 ${r.user_name} &nbsp;<span style="color:var(--muted);font-size:.85rem;">📞 ${r.user_phone}</span></div>
+                  <div style="color:var(--teal);margin-top:4px;font-size:.88rem;">📅 Approve होने पर Expiry: <strong>${expiry}</strong></div>
+                  <div style="color:var(--muted);font-size:.78rem;margin-top:3px;">📱 ${r.method} &nbsp;|&nbsp; 🕐 ${date}</div>
+                </div>
+                <div style="display:flex;gap:8px;flex-shrink:0;">
+                  <button onclick="approvePayment('${r.id}')" style="padding:8px 18px;background:var(--teal);color:#000;border:none;border-radius:20px;font-weight:800;cursor:pointer;font-size:.9rem;">✅ Approve</button>
+                  <button onclick="rejectPayment('${r.id}')" style="padding:8px 18px;background:var(--accent);color:#fff;border:none;border-radius:20px;font-weight:800;cursor:pointer;font-size:.9rem;">❌ Reject</button>
+                </div>
+              </div>
+            </div>`;
+          });
+          html += `</div>`;
+        });
+      }
     }
-    if(done.length){
-      html += `<div style="font-weight:700;color:var(--muted);margin:18px 0 10px;">📋 History (${done.length})</div>`;
-      done.forEach(r=>{
-        const date = new Date(r.submitted_at).toLocaleString('hi-IN');
-        const badge = r.status==='approved' ? `<span style="color:var(--teal);">✅ Approved</span>` : `<span style="color:var(--accent);">❌ Rejected</span>`;
-        html += `<div style="background:#111122;border:1px solid #333;border-radius:10px;padding:12px;margin-bottom:8px;opacity:.8;">
-          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;">
-            <div><span style="font-weight:700;">👤 ${r.user_name}</span> &nbsp;
-              <span style="color:var(--muted);font-size:.85rem;">📞 ${r.user_phone}</span> &nbsp;
-              <span style="color:var(--gold);">₹${r.price}</span></div>
-            ${badge}
-          </div>
-          <div style="color:var(--muted);font-size:.8rem;margin-top:4px;">📱 ${r.method} · ${date}</div>
-        </div>`;
-      });
+
+    // ── APPROVED TAB ──
+    if(activeTab==='approved'){
+      if(!approved.length){
+        html += `<div style="text-align:center;padding:40px;color:var(--muted);">कोई approved request नहीं।</div>`;
+      } else {
+        approved.slice().reverse().forEach(r=>{
+          const date = new Date(r.submitted_at).toLocaleString('hi-IN');
+          const approvedDate = r.approved_at ? new Date(r.approved_at).toLocaleDateString('hi-IN') : '—';
+          html += `<div style="background:#111;border:1px solid rgba(6,214,160,0.25);border-radius:10px;padding:12px;margin-bottom:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;">
+              <div>
+                <span style="font-weight:700;">👤 ${r.user_name}</span>
+                <span style="color:var(--muted);font-size:.85rem;margin-left:8px;">📞 ${r.user_phone}</span>
+              </div>
+              <span style="color:var(--teal);font-weight:700;">✅ Approved</span>
+            </div>
+            <div style="color:var(--gold);font-size:.85rem;margin-top:4px;">💳 ${r.plan_name} · ₹${r.price} · ${r.days} दिन</div>
+            <div style="color:var(--muted);font-size:.78rem;margin-top:3px;">📱 ${r.method} · Submitted: ${date} · Approved: ${approvedDate}</div>
+          </div>`;
+        });
+      }
     }
+
+    // ── REJECTED TAB ──
+    if(activeTab==='rejected'){
+      if(!rejected.length){
+        html += `<div style="text-align:center;padding:40px;color:var(--muted);">कोई rejected request नहीं।</div>`;
+      } else {
+        rejected.slice().reverse().forEach(r=>{
+          const date = new Date(r.submitted_at).toLocaleString('hi-IN');
+          html += `<div style="background:#111;border:1px solid rgba(255,77,109,0.2);border-radius:10px;padding:12px;margin-bottom:8px;opacity:.85;">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;">
+              <div>
+                <span style="font-weight:700;">👤 ${r.user_name}</span>
+                <span style="color:var(--muted);font-size:.85rem;margin-left:8px;">📞 ${r.user_phone}</span>
+              </div>
+              <span style="color:var(--accent);font-weight:700;">❌ Rejected</span>
+            </div>
+            <div style="color:var(--gold);font-size:.85rem;margin-top:4px;">💳 ${r.plan_name} · ₹${r.price}</div>
+            <div style="color:var(--muted);font-size:.78rem;margin-top:3px;">📱 ${r.method} · ${date}</div>
+          </div>`;
+        });
+      }
+    }
+
     con.innerHTML = html;
   } catch(e){ con.innerHTML = '<p style="color:red;padding:20px;">Error loading requests</p>'; }
 }
