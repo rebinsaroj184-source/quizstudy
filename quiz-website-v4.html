@@ -312,6 +312,7 @@ select option{background:var(--card2);}
     <button class="btn-login" id="btn-login-top" onclick="openLogin()">Login</button>
     <button class="btn-create-acc" id="btn-signup-top" onclick="openSignup()">Create Account</button>
     <button class="btn-premium" id="btn-premium-top" onclick="openPremiumPlans()">⭐ Get Premium</button>
+    <button onclick="openLeaderboard()" style="padding:7px 14px;border-radius:20px;border:1px solid rgba(255,209,102,0.3);background:rgba(255,209,102,0.1);color:var(--gold);font-size:.82rem;font-weight:700;cursor:pointer;">🏆</button>
     <button class="btn-logout" id="btn-logout-top" onclick="doLogout()">Logout</button>
   </div>
 </div>
@@ -600,6 +601,7 @@ async function openQuizUrl(quizId, type, btnEl){
     if(!data.htmlContent && !data.url){ alert('Quiz नहीं मिली। Admin से संपर्क करें।'); return; }
     // HTML content hai to modal mein kholo, warna URL new tab mein
     if(data.htmlContent){
+      window._currentQuizId = quizId;
       openQuizModal(data.htmlContent);
     } else {
       window.open(data.url, '_blank', 'noopener,noreferrer');
@@ -1740,11 +1742,117 @@ function closeQuizModal(){
   document.body.style.overflow = '';
 }
 
+// ── SCORE LISTENER — quiz iframe se score receive karo ──
+window.addEventListener('message', async function(e){
+  if(!e.data || e.data.type !== 'QUIZ_SCORE') return;
+  if(!currentUser) return; // login nahi hai to save nahi
+  const { score, total, percentage, timeTaken, quizTitle } = e.data;
+  // Current quiz ID get karo
+  const quizId = window._currentQuizId || 'unknown';
+  try {
+    await fetch('/.netlify/functions/db?action=save-score', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: currentUser.id,
+        userName: currentUser.name,
+        quizId,
+        quizName: quizTitle || 'Quiz',
+        score, total, timeTaken: timeTaken || 0
+      })
+    });
+  } catch(err){ console.warn('Score save error', err); }
+});
+
+// ── LEADERBOARD ──
+async function openLeaderboard(){
+  showPage('page-leaderboard');
+  renderLeaderboard();
+}
+
+async function renderLeaderboard(quizId=''){
+  const con = document.getElementById('lb-list'); if(!con) return;
+  con.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted);">Loading...</div>';
+  try {
+    const url = quizId
+      ? `/.netlify/functions/db?action=leaderboard&quizId=${encodeURIComponent(quizId)}`
+      : '/.netlify/functions/db?action=leaderboard';
+    const res = await fetch(url);
+    const { leaderboard } = await res.json();
+    const list = leaderboard || [];
+    if(!list.length){
+      con.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted);">अभी कोई score नहीं है। Quiz दो! 🎯</div>';
+      return;
+    }
+    const medals = ['🥇','🥈','🥉'];
+    const bgColors = ['rgba(255,215,0,0.1)','rgba(192,192,192,0.08)','rgba(205,127,50,0.08)'];
+    const borderColors = ['rgba(255,209,102,0.4)','rgba(192,192,192,0.3)','rgba(205,127,50,0.3)'];
+    let html = '';
+    list.forEach((item, i) => {
+      const rank = i + 1;
+      const medal = medals[i] || `<span style="color:var(--muted);font-weight:800;">#${rank}</span>`;
+      const bg = bgColors[i] || 'rgba(255,255,255,0.03)';
+      const border = borderColors[i] || 'rgba(255,255,255,0.08)';
+      const isMe = currentUser && item.user_id === currentUser.id;
+      const date = new Date(item.submitted_at).toLocaleDateString('hi-IN');
+      const mins = Math.floor((item.time_taken||0)/60);
+      const secs = (item.time_taken||0)%60;
+      html += `<div style="background:${bg};border:2px solid ${border};border-radius:14px;padding:14px 18px;margin-bottom:10px;${isMe?'box-shadow:0 0 0 2px var(--accent);':''}">
+        <div style="display:flex;align-items:center;gap:14px;">
+          <div style="font-size:${i<3?'1.8rem':'1.1rem'};min-width:36px;text-align:center;">${medal}</div>
+          <div style="flex:1;">
+            <div style="font-weight:800;font-size:1rem;">${item.user_name} ${isMe?'<span style="color:var(--accent);font-size:.75rem;">(आप)</span>':''}</div>
+            <div style="color:var(--muted);font-size:.78rem;margin-top:2px;">📝 ${item.quiz_name} · 📅 ${date}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:1.3rem;font-weight:900;color:${item.percentage>=75?'var(--teal)':item.percentage>=50?'var(--gold)':'var(--accent)'};">${item.percentage}%</div>
+            <div style="color:var(--muted);font-size:.75rem;">${item.score}/${item.total} · ⏱️${mins}m${secs}s</div>
+          </div>
+        </div>
+      </div>`;
+    });
+    con.innerHTML = html;
+  } catch(e){
+    con.innerHTML = '<div style="text-align:center;padding:20px;color:red;">Error loading leaderboard</div>';
+  }
+}
+
 // ═══════════════════════════════════════
 // INIT — session load triggers renderHomePage + updateTopbar
 // ═══════════════════════════════════════
 // (called inside loadSession() above)
 </script>
+
+<!-- ══════════ PAGE: LEADERBOARD ══════════ -->
+<div id="page-leaderboard" class="page" style="padding-bottom:40px;">
+  <div class="page-header">
+    <button class="back-btn" onclick="goHome()">← वापस</button>
+    <div class="ph-info"><h1>🏆 Leaderboard</h1><p>Top Performers</p></div>
+  </div>
+  <div style="max-width:600px;margin:0 auto;padding:16px;">
+    <!-- Top 3 Banner -->
+    <div style="display:flex;justify-content:center;gap:12px;margin-bottom:24px;flex-wrap:wrap;">
+      <div style="background:linear-gradient(135deg,rgba(255,209,102,0.15),rgba(255,209,102,0.05));border:1px solid rgba(255,209,102,0.3);border-radius:16px;padding:12px 20px;text-align:center;min-width:80px;">
+        <div style="font-size:2rem;">🥇</div>
+        <div style="font-size:.75rem;color:var(--gold);font-weight:700;margin-top:4px;">1st Place</div>
+      </div>
+      <div style="background:linear-gradient(135deg,rgba(192,192,192,0.1),rgba(192,192,192,0.03));border:1px solid rgba(192,192,192,0.2);border-radius:16px;padding:12px 20px;text-align:center;min-width:80px;">
+        <div style="font-size:2rem;">🥈</div>
+        <div style="font-size:.75rem;color:#aaa;font-weight:700;margin-top:4px;">2nd Place</div>
+      </div>
+      <div style="background:linear-gradient(135deg,rgba(205,127,50,0.1),rgba(205,127,50,0.03));border:1px solid rgba(205,127,50,0.2);border-radius:16px;padding:12px 20px;text-align:center;min-width:80px;">
+        <div style="font-size:2rem;">🥉</div>
+        <div style="font-size:.75rem;color:#cd7f32;font-weight:700;margin-top:4px;">3rd Place</div>
+      </div>
+    </div>
+    <!-- Filter -->
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
+      <button onclick="renderLeaderboard('')" style="padding:7px 16px;border-radius:20px;border:1px solid var(--border);background:var(--card);color:var(--text);cursor:pointer;font-size:.85rem;font-weight:600;">🌍 Global</button>
+    </div>
+    <!-- List -->
+    <div id="lb-list"></div>
+  </div>
+</div>
 
 <!-- ══════════ QUIZ MODAL ══════════ -->
 <div id="quiz-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;background:rgba(0,0,0,0.95);flex-direction:column;">
